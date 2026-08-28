@@ -6,8 +6,8 @@ WiFiManager wifiManager;
 bool isConnected = false;
 unsigned long lastWiFiCheckTime = 0;
 // unsigned long portalStartTime = 0;
-const unsigned long TIMEOUT_MS = 60000; // 60 seconds timeout before restart
-void initConnection()
+// const unsigned long TIMEOUT_MS = 5000; // 5 seconds 
+void initConnection(const std::function<void(bool)> &callback)
 {
     wifiManager.setConnectTimeout(15);
 
@@ -16,7 +16,12 @@ void initConnection()
 
     // Start the asynchronous connection attempt
     apName = apName + "-" + String(ESP.getChipId(), HEX);
-    wifiManager.autoConnect(apName.c_str(), "");
+    if (!wifiManager.autoConnect(apName.c_str(), ""))
+    {
+        // Serial.println("AutoConnect Failed | Callback => FALSE");
+        delay(1000);
+        callback(false);
+    }
 
     // Mark when we started trying to connect
     // portalStartTime = millis();

@@ -3,7 +3,7 @@
 #ifndef FONTDATA_H
 #define FONTDATA_H
 
-MD_MAX72XX::fontType_t numeric7Seg[] PROGMEM =
+MD_MAX72XX::fontType_t smallerDigits[] PROGMEM =
     {
         0, // 0
         0, // 1
@@ -357,7 +357,7 @@ MD_MAX72XX::fontType_t numeric7Seg[] PROGMEM =
         0,   // 255
 };
 
-MD_MAX72XX::fontType_t numeric7Se[] PROGMEM =
+MD_MAX72XX::fontType_t smallDigits[] PROGMEM =
     {
         0, // 0
         0, // 1

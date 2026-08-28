@@ -84,7 +84,11 @@ const char INDEX_PAGE[] PROGMEM = R"=====(
         <div class="value" id="device_location">{device_location}</div>
       </div>
       <div>
-        Brightness Level:
+        Brightness Mode:
+        <div class="value" id="brightness_mode">{brightness_mode}</div>
+      </div>
+      <div>
+        Manual Brightness Level:
         <div class="value" id="brightness">{brightness}</div>
       </div>
       <div>
@@ -95,22 +99,31 @@ const char INDEX_PAGE[] PROGMEM = R"=====(
 
     <div class="card">
       <h3>Pengaturan Variabel</h3>
+      <form action="/set_brightness_mode" method="GET">
+        <label>Brightness Mode:</label>
+        <select name="brightness_mode">
+          <option value="0" {brightness_manual}>Manual</option>
+          <option value="1" {brightness_auto}>Auto</option>
+        </select>
+        <button type="submit">Simpan</button>
+      </form>
       <form action="/set_brightness" method="GET">
         <label>Brightness Level:</label>
         <input
           type="range"
           name="brightness"
-          min="0"
-          max="15"
-          value="{brightness_input}"
+          min="{min_brightness}"
+          max="{max_brightness}"
+          value="{brightness_value}"
+          {set_brightness}
         />
-        <button type="submit">Simpan</button>
+        <button type="submit" {set_brightness}>Simpan</button>
       </form>
       <form action="/set_time_format" method="GET">
         <label>Time Format:</label>
         <select name="time_format">
-          <option value="0">24 hour</option>
-          <option value="1">12 hour (AM/PM)</option>
+          <option value="0" {time_format_24}>24 hour</option>
+          <option value="1" {time_format_12}>12 hour (AM/PM)</option>
         </select>
         <button type="submit">Simpan</button>
       </form>
