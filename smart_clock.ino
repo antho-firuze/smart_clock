@@ -15,11 +15,16 @@
 #include "wifi_manager_config.h"
 #include "blynk_config.h"
 #include "Font_Data.h"
+#include "Font_Data_2.h"
 #include "index_page.h"
 #include "ota_page.h"
 
-#define SDA_PIN 4 // D2
-#define SCL_PIN 5 // D1
+#define SDA_PIN 4     // D2
+#define SCL_PIN 5     // D1
+uint8_t LDR_PIN = 17; // A0
+
+String deviceLocation = "";
+String version = "1.1.0";
 
 enum DisplayState
 {
@@ -28,13 +33,14 @@ enum DisplayState
     SHOW_TIMEZONE_FAILED,
     SHOW_NTP_FAILED,
     SHOW_CLOCK,
+    SHOW_WDAY,
     SHOW_DATE,
-    SHOW_TEMP_HUM
+    SHOW_TEMP_HUM,
+    SHOW_CUSTOM_TEXT,
 };
 DisplayState displayState = SHOW_CLOCK;
-
-String deviceLocation = "";
-String version = "1.1.0";
+// Display buffer
+char buffer[40];
 
 // TEMP & HUM ===========================
 Adafruit_AHT10 aht;
@@ -55,62 +61,15 @@ void initAHTSensor()
     // Initial read to populate screen data immediately
     offsetTemp = getKeyValue("offsetTemp", String(offsetTemp).c_str()).toFloat();
     offsetHum = getKeyValue("offsetHum", String(offsetHum).c_str()).toFloat();
-    readAHTSensor();
-}
-void readAHTSensor()
-{
-    sensors_event_t humidityEvent, tempEvent;
-    if (aht.getEvent(&humidityEvent, &tempEvent))
-    {
-        temperature = tempEvent.temperature + offsetTemp;
-        humidity = humidityEvent.relative_humidity + offsetHum;
-
-        // Serial.print(F("Temperature: "));
-        // Serial.print(temperature);
-        // Serial.print(F(" °C Humidity: "));
-        // Serial.print(humidity);
-        // Serial.println(F(" %"));
-    }
-}
-void updateAHTSensor()
-{
-    if (millis() - lastSensorReadTime >= SENSOR_READ_INTERVAL)
-    {
-        readAHTSensor();
-        lastSensorReadTime = millis();
-    }
-}
-String getTempHumString()
-{
-    String text = String(temperature, 1) + "\xB0" + "C " + String(humidity, 1) + "%";
-    return text;
 }
 // TEMP & HUM ===========================
-
-// LDR Sensor =========================
-const int LDR_PIN = A0;
-unsigned long lastLdrRead = 0;
-const long LDR_INTERVAL = 1000;
-void updateLDRSensor()
-{
-    if (millis() - lastLdrRead >= LDR_INTERVAL)
-    {
-        lastLdrRead = millis();
-
-        int ldrValue = analogRead(LDR_PIN);
-        Serial.printf("Analog (Light Intensity): %d\n", ldrValue);
-    }
-}
-// LDR Sensor =========================
 
 // GEOLOCATION & TIMEZONE ================
 // Timezone in seconds: Auto-detected from geolocation during startup
 // Fallback: 0 = UTC (will be overridden by geolocation)
-int32_t TIMEZONE_SECONDS = 0;
+int32_t TIMEZONE_SECONDS = 7 * 3600; // Adjust timezone offset (e.g., GMT+7 = 7 * 3600)
 // Geolocation API endpoint
 const char *GEOLOCATION_API = "http://ip-api.com/json/?fields=country,city,lat,lon,timezone,offset";
-bool geoSync = false;
-unsigned long lastGeoSync = 0;
 const unsigned long RETRY_GEOSYNC_MS = 10000; // 10 seconds timeout before retry
 // Geolocation data
 struct
@@ -124,15 +83,12 @@ struct
 } location;
 void initGeoLocation()
 {
-    geoSync = getKeyValue("geo_sync", "0").toInt() == 1;
-    TIMEZONE_SECONDS = getKeyValue("TIMEZONE_SECONDS", "25200").toInt();
-    Serial.printf("Last Geolocation Sync: %s | Timezone offset (seconds): %d\n", geoSync == 1 ? "TRUE" : "FALSE", TIMEZONE_SECONDS);
+    // geoSync = getKeyValue("geo_sync", String(geoSync ? "1" : "0").c_str()).toInt() == 1;
+    TIMEZONE_SECONDS = getKeyValue("TIMEZONE_SECONDS", String(TIMEZONE_SECONDS).c_str()).toInt();
+    // Serial.printf("Last Geolocation Sync: %s | Timezone offset (seconds): %d\n", geoSync == 1 ? "TRUE" : "FALSE", TIMEZONE_SECONDS);
 }
 void fetchGeolocation()
 {
-    if (geoSync)
-        return;
-
     Serial.println("Fetching geolocation and timezone...");
 
     WiFiClient client;
@@ -146,9 +102,6 @@ void fetchGeolocation()
     {
         Serial.println("Geolocation API request failed");
         http.end();
-        geoSync = false;
-        displayState = SHOW_TIMEZONE_FAILED;
-        lastGeoSync = millis();
         return;
     }
 
@@ -165,9 +118,6 @@ void fetchGeolocation()
     {
         Serial.print("JSON parsing failed: ");
         Serial.println(error.c_str());
-        geoSync = false;
-        displayState = SHOW_TIMEZONE_FAILED;
-        lastGeoSync = millis();
         return;
     }
 
@@ -187,18 +137,15 @@ void fetchGeolocation()
     Serial.printf("Timezone: %s (UTC offset: %d seconds)\n", location.timezone, location.utcOffset);
 
     setKeyValue("TIMEZONE_SECONDS", String(TIMEZONE_SECONDS).c_str());
-    setKeyValue("geo_sync", "1");
-    geoSync = true;
 }
 // GEOLOCATION & TIMEZONE ================
 
 // NTP Synchronization ================
 const int DST = 0;
 // NTP servers for time synchronization
-const char *NTP_SERVERS[] = {"pool.ntp.org", "time.nist.gov", "asia.pool.ntp.org"};
-bool ntpSync = false;
+const char *NTP_SERVERS[] = {"pool.ntp.org", "time.nist.gov", "asia.pool.ntp.org", "time.google.com"};
 unsigned long lastNTPSync = 0;
-const unsigned long RETRY_NTPSYNC_MS = 10000;    // retry every 10 seconds when sync FAILED
+const unsigned long RETRY_NTPSYNC_MS = 10000;         // retry every 10 seconds when sync FAILED
 const unsigned long INTERVAL_NTPSYNC_MS = 60000 * 60; // every 1 hours sync to NTP server
 void syncTimeFromNTP()
 {
@@ -211,41 +158,38 @@ void syncTimeFromNTP()
     configTime(TIMEZONE_SECONDS, DST, NTP_SERVERS[0], NTP_SERVERS[1], NTP_SERVERS[2]);
 
     // Wait for time to be set (max 10 seconds)
-    uint32_t startTime = millis();
-    time_t now = time(nullptr);
+    // uint32_t startTime = millis();
+    // time_t now = time(nullptr);
 
-    while (now < 24 * 3600 && (millis() - startTime) < 10000)
-    {
-        delay(100);
-        now = time(nullptr);
-    }
+    // while (now < 24 * 3600 && (millis() - startTime) < 10000)
+    // {
+    //     delay(100);
+    //     now = time(nullptr);
+    // }
 
-    if (now > 24 * 3600)
-    {
-        Serial.println("Time synchronized successfully");
-        // Print the synchronized time
-        time_t syncTime = time(nullptr);
-        struct tm *p_tm = localtime(&syncTime);
-        Serial.print("Fetched UTC time: ");
-        Serial.print(p_tm->tm_year + 1900);
-        Serial.print("-");
-        Serial.print(p_tm->tm_mon + 1);
-        Serial.print("-");
-        Serial.print(p_tm->tm_mday);
-        Serial.print(" ");
-        Serial.print(p_tm->tm_hour);
-        Serial.print(":");
-        Serial.print(p_tm->tm_min);
-        Serial.print(":");
-        Serial.println(p_tm->tm_sec);
-        ntpSync = true;
-    }
-    else
-    {
-        Serial.println("Failed to synchronize time from NTP.");
-        ntpSync = false;
-        displayState = SHOW_NTP_FAILED;
-    }
+    // if (now > 24 * 3600)
+    // {
+    //     Serial.println("Time synchronized successfully");
+    //     // Print the synchronized time
+    //     time_t syncTime = time(nullptr);
+    //     struct tm *p_tm = localtime(&syncTime);
+    //     Serial.print("Fetched UTC time: ");
+    //     Serial.print(p_tm->tm_year + 1900);
+    //     Serial.print("-");
+    //     Serial.print(p_tm->tm_mon + 1);
+    //     Serial.print("-");
+    //     Serial.print(p_tm->tm_mday);
+    //     Serial.print(" ");
+    //     Serial.print(p_tm->tm_hour);
+    //     Serial.print(":");
+    //     Serial.print(p_tm->tm_min);
+    //     Serial.print(":");
+    //     Serial.println(p_tm->tm_sec);
+    // }
+    // else
+    // {
+    //     Serial.println("Failed to synchronize time from NTP.");
+    // }
 }
 // NTP Synchronization ================
 
@@ -259,104 +203,44 @@ const char *monthNames[] = {
     "Invalid", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 const char *daysOfWeek[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
-// Display buffers
-char szClock[12];  // HH:MM:SS\0
-char szTime[9];    // HH:MM\0
-char szSeconds[4]; // SS\0
-char szWDay[4];
-char szDate[2];
-char szMonth[2];
-char Time[] = "00:00";
-char Seconds[] = "00";
+const char *daysOfWeekID[] = {"Ahad", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"};
 void initTime()
 {
     use12HourFormat = getKeyValue("use12HourFormat", "0").toInt() == 1;
-}
-void updateClock()
-{
-    time_t now = time(nullptr);
-    struct tm *p_tm = localtime(&now);
-
-    if (use12HourFormat)
-    {
-        h = p_tm->tm_hour % 12;
-        h = h == 0 ? 12 : h;
-    }
-    else
-    {
-        h = p_tm->tm_hour;
-    }
-    m = p_tm->tm_min;
-    s = p_tm->tm_sec;
-
-    sprintf(szSeconds, "%02d", s);
-    sprintf(szTime, "%02d%c%02d", h, (flasher ? ':' : ' '), m);
-    sprintf(szClock, "%02d%c%02d%c%02d", h, (flasher ? ':' : ' '), m, (flasher ? ':' : ' '), s);
-    flasher = !flasher;
-
-    Seconds[1] = s % 10 + 48;
-    Seconds[0] = s / 10 + 48;
-    Time[4] = m % 10 + 48;
-    Time[3] = m / 10 + 48;
-    Time[1] = h % 10 + 48;
-    Time[0] = h / 10 + 48;
-}
-void updateDate()
-{
-    time_t now = time(nullptr);
-    struct tm *p_tm = localtime(&now);
-
-    year = p_tm->tm_year + 1900;
-    month = p_tm->tm_mon + 1;
-    day = p_tm->tm_mday;
-    String shortMonth = monthNames[month];
-    String shortDay = daysOfWeek[p_tm->tm_wday];
-
-    shortDay.toUpperCase();
-    sprintf(szWDay, "%s", shortDay);
-    sprintf(szDate, "%02d", day);
-    sprintf(szMonth, "%02d", month);
-}
-String getDateString()
-{
-    time_t now = time(nullptr);
-    struct tm *p_tm = localtime(&now);
-
-    year = p_tm->tm_year + 1900;
-    month = p_tm->tm_mon + 1;
-    day = p_tm->tm_mday;
-    String shortMonth = monthNames[month];
-    String shortDay = daysOfWeek[p_tm->tm_wday];
-
-    shortDay.toUpperCase();
-    shortMonth.toUpperCase();
-    // String text2 = shortDay + " " + day + " " + shortMonth + " " + year;
-    String text2 = shortDay + " " + day + " " + shortMonth;
-
-    return text2;
 }
 // Date & Time configuration ================
 
 // Display configuration ================
 #define HARDWARE_TYPE MD_MAX72XX::FC16_HW
-#define MAX_DEVICES 5
+#define MAX_DEVICES 8
 #define CLK_PIN D5  // SCK
 #define DATA_PIN D7 // MOSI
 #define CS_PIN D8   // SS / CS
 MD_Parola P = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
 
-bool autoBrightness = true;
-int brightness = 1;
+bool autoBrightness = false;
+int brightness = 3;
 int minBrightness = 0;
-int maxBrightness = 3;
+int maxBrightness = 15;
 int minIntensity = 1023; // Dark
 int maxIntensity = 800;  // Light
-unsigned long stateMillis = 0;
-unsigned long SHOW_CLOCK_DELAY_MS = 45000; // 45 seconds
-unsigned long SHOW_DATE_DELAY_MS = 15000;  // 15 seconds
-DisplayState lastDisplayState;
-String msg = "";
-bool isScrolling = false;
+unsigned long clockTimer = 0, clockBlinkingTimer = 0, autoBrightnessTimer = 0;
+unsigned long SHOW_CLOCK_DELAY_MS = 30000; // 30 seconds
+std::vector<std::string> customText = {
+    "",
+    "",
+    ""};
+String customText0 = "Selamat datang tamu Rasulullah SAW !";
+String customText1 = "1448 H / 2026 M";
+String customText2 = "PAUD Az-Zahra";
+int customTextCount = sizeof(customText) / sizeof(customText[0]);
+int customTextIdx = 0;
+int steps = 1;
+// Colon override: top 1 row off, dots rows 1-2, gap row 3, dots rows 4-5, bottom 2 rows off
+uint8_t colonChar[] = {2, 0x36, 0x36};
+uint8_t narrowBlank[] = {2, 0x00, 0x00};      // same width as colon, for blink-off
+uint8_t smallA_chr[] = {3, 0x78, 0x14, 0x78}; // 3x5 small A (AM indicator)
+uint8_t smallP_chr[] = {3, 0x7C, 0x14, 0x0C}; // 3x5 small P (PM indicator)
 void initDisplay()
 {
     autoBrightness = getKeyValue("auto_brightness", autoBrightness ? "1" : "0") == "1";
@@ -364,59 +248,31 @@ void initDisplay()
     minBrightness = getKeyValue("min_brightness", String(minBrightness).c_str()).toInt();
     maxBrightness = getKeyValue("max_brightness", String(maxBrightness).c_str()).toInt();
     SHOW_CLOCK_DELAY_MS = getKeyValue("SHOW_CLOCK_DELAY_MS", String(SHOW_CLOCK_DELAY_MS).c_str()).toInt();
-    SHOW_DATE_DELAY_MS = getKeyValue("SHOW_DATE_DELAY_MS", String(SHOW_DATE_DELAY_MS).c_str()).toInt();
+    customText0 = getKeyValue("custom_text0", customText0.c_str());
+    customText1 = getKeyValue("custom_text1", customText1.c_str());
+    customText2 = getKeyValue("custom_text2", customText2.c_str());
+    customText[0] = customText0.c_str();
+    customText[1] = customText1.c_str();
+    customText[2] = customText2.c_str();
 
     P.begin();
     P.setInvert(false);
     P.setIntensity(brightness);
-}
-// void triggerSingleZoneDisplay()
-// {
-//     // Reassign Zone 0 to swallow all hardware modules (0 to 4)
-//     P.setZone(0, 0, MAX_DEVICES - 1);
-//     P.setFont(0, nullptr);
-//     P.displayReset(0);
-//     P.setIntensity(brightness);
-//     P.displayClear();
-// }
-// void triggerSplitZoneDisplay()
-// {
-//     // Split them back out whenever you need to
-//     P.setZone(0, 0, 1);
-//     P.setZone(1, 2, 4);
-//     P.setFont(0, smallerDigits);
-//     P.setFont(1, smallDigits);
-//     P.displayReset(0);
-//     P.displayReset(1);
-//     P.setIntensity(brightness);
-// }
-void scrollingDisplay(const char *text, uint16_t speed, uint16_t pause)
-{
-    isScrolling = true;
-    Serial.println(text);
+    P.addChar(':', colonChar);
+    P.addChar('', narrowBlank);
+    P.addChar('', smallA_chr);
+    P.addChar('', smallP_chr);
     P.displayClear();
-    P.setFont(nullptr);
-    P.displayText(text, PA_LEFT, speed, pause, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
-}
-void staticClockDisplay()
-{
-    isScrolling = false;
-    updateClock();
-    P.displayText(szClock, PA_CENTER, 75, 0, PA_NO_EFFECT);
-    P.displayAnimate();
+    // P.setFont(smallDigits);
+    // P.setFont(myFont);
+
+    displayState = SHOW_CLOCK;
 }
 void updateDisplay()
 {
-    // displayAnimate handles non-blocking frame updates automatically
-    if (isScrolling)
-        if (P.displayAnimate())
-            P.displayReset();
-
-    // check update display every second
-    if (millis() - lastTimeUpdate >= 1000)
+    if (millis() - autoBrightnessTimer >= 1000)
     {
-        lastTimeUpdate = millis();
-
+        autoBrightnessTimer = millis();
         // CHECK LDR SENSOR FOR UPDATE AUTO BRIGHTNESS
         if (autoBrightness)
         {
@@ -432,125 +288,193 @@ void updateDisplay()
             // Serial.printf("brightness: %d\n", brightness);
             P.setIntensity(brightness);
         }
+    }
 
-        // CHECK displayState
+    if (P.displayAnimate())
+    {
         switch (displayState)
         {
-        case SHOW_CONNECTION_SETUP:
-            if (displayState != lastDisplayState)
-            {
-                Serial.println("SHOW_CONNECTION_SETUP");
-                stateMillis = millis();
-
-                msg = "INITIAL SETUP IP:" + WiFi.softAPIP().toString();
-                scrollingDisplay(msg.c_str(), 50, 0);
-                lastDisplayState = displayState;
-            }
-            if (millis() - stateMillis >= 30000)
-            {
-                stateMillis = millis();
-                scrollingDisplay(msg.c_str(), 50, 0);
-            }
-            break;
-        case SHOW_CONNECTION_FAILED:
-            if (displayState != lastDisplayState)
-            {
-                Serial.println("SHOW_CONNECTION_FAILED");
-                stateMillis = millis();
-
-                msg = "CONNECTION FAILED | IP:" + WiFi.localIP().toString();
-                scrollingDisplay(msg.c_str(), 50, 0);
-                lastDisplayState = displayState;
-            }
-            if (millis() - stateMillis >= 30000)
-            {
-                stateMillis = millis();
-                scrollingDisplay(msg.c_str(), 50, 0);
-            }
-            break;
-        case SHOW_TIMEZONE_FAILED:
-            if (displayState != lastDisplayState)
-            {
-                Serial.println("SHOW_TIMEZONE_FAILED");
-                stateMillis = millis();
-
-                msg = "TIMEZONE SYNC FAILED | Retry...";
-                scrollingDisplay(msg.c_str(), 50, 0);
-                lastDisplayState = displayState;
-            }
-            if (millis() - stateMillis >= 30000)
-            {
-                stateMillis = millis();
-                scrollingDisplay(msg.c_str(), 50, 0);
-            }
-            break;
-        case SHOW_NTP_FAILED:
-            if (displayState != lastDisplayState)
-            {
-                Serial.println("SHOW_NTP_FAILED");
-                stateMillis = millis();
-
-                msg = "NTP SYNC FAILED | Retry...";
-                scrollingDisplay(msg.c_str(), 50, 0);
-                lastDisplayState = displayState;
-            }
-            if (millis() - stateMillis >= 30000)
-            {
-                stateMillis = millis();
-                scrollingDisplay(msg.c_str(), 50, 0);
-            }
-            break;
         case SHOW_CLOCK:
-            if (displayState != lastDisplayState)
+            if (steps == 1)
             {
-                Serial.println("SHOW_CLOCK");
-                stateMillis = millis();
-
-                P.setFont(smallDigits);
-                staticClockDisplay();
-                lastDisplayState = displayState;
+                Serial.println("SHOW_CLOCK-IN");
+                steps = 2;
+                clockTimer = millis();
+                getClockString(buffer);
+                Serial.println(buffer);
+                P.displayText(buffer, PA_CENTER, 50, 500, PA_SCROLL_UP, PA_NO_EFFECT);
             }
-
-            staticClockDisplay();
-
-            if (millis() - stateMillis >= SHOW_CLOCK_DELAY_MS)
+            else if (steps == 2)
             {
-                displayState = SHOW_DATE;
+                // Update every second for blinking effect
+                if (millis() - clockBlinkingTimer >= 1000)
+                {
+                    Serial.println("SHOW_CLOCK-TACK");
+                    clockBlinkingTimer = millis();
+                    getClockString(buffer);
+                    Serial.println(buffer);
+                    P.print(buffer);
+                }
+            }
+            if (millis() - clockTimer >= SHOW_CLOCK_DELAY_MS)
+            {
+                Serial.println("SHOW_CLOCK-OUT");
+                steps = 1;
+                displayState = SHOW_WDAY;
+                getClockString(buffer);
+                Serial.println(buffer);
+                P.displayText(buffer, PA_CENTER, 50, 100, PA_NO_EFFECT, PA_SCROLL_UP);
             }
             break;
+
+        case SHOW_WDAY:
+            Serial.println("SHOW_WDAY");
+            getWeekDay(buffer);
+            Serial.println(buffer);
+            P.displayText(buffer, PA_CENTER, 75, 1500, PA_SCROLL_UP, PA_SCROLL_UP);
+            displayState = SHOW_DATE;
+            break;
+
         case SHOW_DATE:
-            if (displayState != lastDisplayState)
-            {
-                Serial.println("SHOW_DATE");
-                stateMillis = millis();
-
-                updateDate();
-
-                // msg = String(szWDay) + " " + String(szDate);
-                msg = getDateString();
-                scrollingDisplay(msg.c_str(), 50, 2000);
-                lastDisplayState = displayState;
-            }
-            if (millis() - stateMillis >= 5000)
-            {
-                displayState = SHOW_TEMP_HUM;
-            }
+            Serial.println("SHOW_DATE");
+            getDateString(buffer);
+            Serial.println(buffer);
+            P.displayText(buffer, PA_CENTER, 50, 2000, PA_SCROLL_UP, PA_SCROLL_UP);
+            displayState = SHOW_TEMP_HUM;
             break;
-        case SHOW_TEMP_HUM:
-            if (displayState != lastDisplayState)
-            {
-                Serial.println("SHOW_TEMP_HUM");
-                stateMillis = millis();
 
-                msg = getTempHumString();
-                scrollingDisplay(msg.c_str(), 50, 2000);
-                lastDisplayState = displayState;
-            }
-            if (millis() - stateMillis >= 6000)
+        case SHOW_TEMP_HUM:
+            Serial.println("SHOW_TEMP_HUM");
+            getWeatherString(buffer);
+            Serial.println(buffer);
+            if (String(buffer) != "Sensor Error")
             {
+                if (MAX_DEVICES > 4)
+                {
+                    P.displayText(buffer, PA_CENTER, 50, 3000, PA_SCROLL_UP, PA_SCROLL_UP);
+                }
+                else 
+                {
+                    P.displayText(buffer, PA_CENTER, 50, 50, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
+                }
+            }
+            displayState = SHOW_CUSTOM_TEXT;
+            break;
+
+        case SHOW_CUSTOM_TEXT:
+            if (customTextIdx < 3)
+            {
+                Serial.println("SHOW_CUSTOM_TEXT");
+                Serial.println(customText[customTextIdx].c_str());
+                if (customText[customTextIdx] != "")
+                {
+                    P.displayText(customText[customTextIdx].c_str(), PA_CENTER, 50, 50, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
+                }
+                customTextIdx++;
+            }
+            else
+            {
+                customTextIdx = 0; // reset index
                 displayState = SHOW_CLOCK;
             }
+            break;
+        default:
+            P.displayReset();
+            break;
         }
+    }
+}
+void getClockString(char *buffer)
+{
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo))
+    {
+        strcpy(buffer, "00:00:00");
+        return;
+    }
+    if (use12HourFormat)
+    {
+        h = timeinfo.tm_hour % 12;
+        h = h == 0 ? 12 : h;
+    }
+    else
+    {
+        h = timeinfo.tm_hour;
+    }
+    m = timeinfo.tm_min;
+    s = timeinfo.tm_sec;
+    // Alternates the colon blinking every second
+    if (MAX_DEVICES > 4)
+    {
+        if (use12HourFormat)
+        {
+            String ampm = (timeinfo.tm_hour < 12) ? "am" : "pm";
+            sprintf(buffer, "%02d%c%02d%c%02d%s", h, (flasher ? ':' : ' '), m, (flasher ? ':' : ' '), s, ampm);
+        }
+        else
+        {
+            sprintf(buffer, "%02d%c%02d%c%02d", h, (flasher ? ':' : ' '), m, (flasher ? ':' : ' '), s);
+        }
+    }
+    else
+    {
+        if (use12HourFormat)
+        {
+            char ampm = (timeinfo.tm_hour < 12) ? '' : '';
+            sprintf(buffer, "%d%c%02d%c", h, (flasher ? ':' : ' '), m, ampm);
+        }
+        else
+        {
+            sprintf(buffer, "%d%c%02d", h, (flasher ? ':' : ' '), m);
+        }
+    }
+    flasher = !flasher;
+}
+void getWeekDay(char *buffer)
+{
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo))
+    {
+        strcpy(buffer, "No Day");
+        return;
+    }
+    sprintf(buffer, "%s", daysOfWeekID[timeinfo.tm_wday]);
+}
+void getDateString(char *buffer)
+{
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo))
+    {
+        strcpy(buffer, "No Date");
+        return;
+    }
+    year = timeinfo.tm_year + 1900;
+    month = timeinfo.tm_mon + 1;
+    day = timeinfo.tm_mday;
+    String shortMonth = monthNames[month];
+    if (MAX_DEVICES > 4)
+    {
+        // strftime(buffer, 20, "%A, %b %d", &timeinfo); // Example: "Monday, Sep 01"
+        sprintf(buffer, "%d %s %04d", day, shortMonth, year); // 1 Jun 2026
+    }
+    else
+    {
+        sprintf(buffer, "%d %s", day, shortMonth); // 1 Jun
+    }
+}
+void getWeatherString(char *buffer)
+{
+    sensors_event_t humidityEvent, tempEvent;
+
+    if (!aht.getEvent(&humidityEvent, &tempEvent))
+    {
+        strcpy(buffer, "Sensor Error");
+    }
+    else
+    {
+        temperature = tempEvent.temperature + offsetTemp;
+        humidity = humidityEvent.relative_humidity + offsetHum;
+        snprintf(buffer, 30, "T:%.1fC  H:%.0f%%", temperature, humidity); // Output pattern: T:26.5C H:65%
     }
 }
 // Display configuration ================
@@ -576,6 +500,9 @@ void handleRoot()
     html.replace("{time_format}", String(use12HourFormat ? "12 hour (AM/PM)" : "24 hour"));
     html.replace("{time_format_24}", String(use12HourFormat ? "" : "selected"));
     html.replace("{time_format_12}", String(use12HourFormat ? "selected" : ""));
+    html.replace("{custom_text0}", String(customText0));
+    html.replace("{custom_text1}", String(customText1));
+    html.replace("{custom_text2}", String(customText2));
     server.send_P(200, "text/html", html.c_str());
 }
 void handleData()
@@ -631,6 +558,29 @@ void handleSetTimeFormat()
     server.sendHeader("Location", "/");
     server.send(303);
 }
+void handleSetCustomText()
+{
+    if (server.hasArg("custom_text0"))
+    {
+        customText0 = server.arg("custom_text0").c_str();
+        customText[0] = customText0.c_str();
+        setKeyValue("custom_text0", customText0.c_str());
+    }
+    if (server.hasArg("custom_text1"))
+    {
+        customText1 = server.arg("custom_text1").c_str();
+        customText[1] = customText1.c_str();
+        setKeyValue("custom_text1", customText1.c_str());
+    }
+    if (server.hasArg("custom_text2"))
+    {
+        customText2 = server.arg("custom_text2").c_str();
+        customText[2] = customText2.c_str();
+        setKeyValue("custom_text2", customText2.c_str());
+    }
+    server.sendHeader("Location", "/");
+    server.send(303);
+}
 void handleWebResetWiFi()
 {
     server.sendHeader("Location", "/");
@@ -648,6 +598,7 @@ void initWebserver()
     server.on("/set_brightness_mode", handleSetBrightnessMode);
     server.on("/set_brightness", handleSetBrightness);
     server.on("/set_time_format", handleSetTimeFormat);
+    server.on("/set_custom_text", handleSetCustomText);
     server.on("/reset_wifi", handleWebResetWiFi);
 
     // Define what happens when you visit the OTA update page
@@ -675,22 +626,14 @@ void setup()
     Serial.begin(115200);
 
     initDisplay();
-    displayState = SHOW_CONNECTION_SETUP;
     initLittleFS();
     deviceLocation = getKeyValue("device_location", "");
     initLedIndicator();
     initAHTSensor();
     initGeoLocation();
     initTime();
-    // setupEye();
 
-    initConnection([](bool connected)
-                   {
-        if (!connected)
-            {
-                Serial.println("Connection Failed !");
-                displayState = SHOW_CONNECTION_SETUP;
-            } });
+    initWiFiConnection(onConnection, onConnectingResult);
     // Setup mDNS for local network access
     initDNS();
 }
@@ -699,37 +642,55 @@ void loop()
 {
     wifiManager.process();
     updateLedIndicator();
-    updateAHTSensor();
     runDNS();
     updateDisplay();
-    checkConnection([](bool connected)
-                    {
-        if (connected) {
-            // This section only running once, after connection establish !
-            Serial.println("This only running once !");
-            // initBlynk();
-            initWebserver();
-            fetchGeolocation();
-            syncTimeFromNTP();
-            if (geoSync && ntpSync)
-            {
-                displayState = SHOW_CLOCK;
-            }
-            currLedState = CONNECTED;
-        } });
+    checkWiFiConnection(onConnected);
     // This section will running after the connection established !
-    if (isConnected)
+    if (isWiFiConnected)
     {
         // runBlynk();
         runWebServer();
-        
-        if (!geoSync && millis() - lastGeoSync >= RETRY_GEOSYNC_MS)
-            fetchGeolocation();
+
+        // if (!geoSync && millis() - lastGeoSync >= RETRY_GEOSYNC_MS)
+        //     fetchGeolocation();
         // Retry Sync to NTP Server when FAILED every interval time
-        if (geoSync && !ntpSync && millis() - lastNTPSync >= RETRY_NTPSYNC_MS)
-            syncTimeFromNTP();
+        // if (geoSync && !ntpSync && millis() - lastNTPSync >= RETRY_NTPSYNC_MS)
+        //     syncTimeFromNTP();
         // Sync to NTP Server every interval time
-        if (geoSync && ntpSync && millis() - lastNTPSync >= INTERVAL_NTPSYNC_MS)
+        if (millis() - lastNTPSync >= INTERVAL_NTPSYNC_MS)
             syncTimeFromNTP();
     }
+}
+
+void onConnection()
+{
+    // onConnecting...
+    Serial.println("On Connecting...");
+    P.displayClear();
+    P.displayText("WiFi...", PA_LEFT, 60, 1000, PA_NO_EFFECT, PA_SCROLL_LEFT);
+}
+void onConnectingResult(bool connected)
+{
+    if (!connected)
+    {
+        Serial.println("Connection Failed !");
+        P.displayClear();
+        // P.print("Connection Failed !");
+        P.displayText("Connection Failed !", PA_LEFT, 60, 1000, PA_NO_EFFECT, PA_SCROLL_LEFT);
+    }
+    else
+    {
+        Serial.println("Yee hay connected !");
+    }
+}
+void onConnected()
+{
+    // This section only running once, after connection establish !
+    // This like setup()
+    Serial.println("This only running once, when WiFi connected !");
+    currLedState = CONNECTED;
+    // initBlynk();
+    initWebserver();
+    fetchGeolocation();
+    syncTimeFromNTP();
 }

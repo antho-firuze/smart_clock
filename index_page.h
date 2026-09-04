@@ -137,6 +137,28 @@ const char INDEX_PAGE[] PROGMEM = R"=====(
         />
         <button type="submit">Simpan</button>
       </form>
+      <form action="/set_custom_text" method="GET">
+        <label>Custom Text:</label>
+        <input
+          type="text"
+          name="custom_text0"
+          id="custom_text0"
+          value="{custom_text0}"
+        />
+        <input
+          type="text"
+          name="custom_text1"
+          id="custom_text1"
+          value="{custom_text1}"
+        />
+        <input
+          type="text"
+          name="custom_text2"
+          id="custom_text2"
+          value="{custom_text2}"
+        />
+        <button type="submit">Simpan</button>
+      </form>
     </div>
 
     <div class="card">

@@ -3,16 +3,18 @@
 // WIFI MANAGER =========================
 String apName = "SmartClock";
 WiFiManager wifiManager;
-bool isConnected = false;
+bool isWiFiConnected = false;
 unsigned long lastWiFiCheckTime = 0;
 // unsigned long portalStartTime = 0;
-// const unsigned long TIMEOUT_MS = 5000; // 5 seconds 
-void initConnection(const std::function<void(bool)> &callback)
+// const unsigned long TIMEOUT_MS = 5000; // 5 seconds
+void initWiFiConnection(const std::function<void()> &onConnecting, const std::function<void(bool)> &callbackResult)
 {
     wifiManager.setConnectTimeout(15);
 
     // Enable non-blocking mode
     wifiManager.setConfigPortalBlocking(false);
+
+    onConnecting();
 
     // Start the asynchronous connection attempt
     apName = apName + "-" + String(ESP.getChipId(), HEX);
@@ -20,15 +22,18 @@ void initConnection(const std::function<void(bool)> &callback)
     {
         // Serial.println("AutoConnect Failed | Callback => FALSE");
         delay(1000);
-        callback(false);
+        callbackResult(false);
+        return;
     }
+
+    callbackResult(true);
 
     // Mark when we started trying to connect
     // portalStartTime = millis();
 }
-void checkConnection(const std::function<void(bool)> &callback)
+void checkWiFiConnection(const std::function<void()> &onConnected)
 {
-    if (!isConnected && millis() - lastWiFiCheckTime >= 1000)
+    if (!isWiFiConnected && millis() - lastWiFiCheckTime >= 1000)
     {
         lastWiFiCheckTime = millis();
         if (WiFi.status() == WL_CONNECTED && WiFi.localIP() == IPAddress(0, 0, 0, 0))
@@ -44,9 +49,9 @@ void checkConnection(const std::function<void(bool)> &callback)
 
             delay(1000);
 
-            isConnected = true;
+            isWiFiConnected = true;
 
-            callback(true);
+            onConnected();
         }
         // if (WiFi.status() != WL_CONNECTED && millis() - portalStartTime >= TIMEOUT_MS)
         // {
