@@ -43,6 +43,7 @@ const char INDEX_PAGE[] PROGMEM = R"=====(
       select,
       input[type="number"],
       input[type="text"],
+      input[type="password"],
       input[type="time"],
       input[type="range"],
       input[type="file"] {
@@ -72,6 +73,56 @@ const char INDEX_PAGE[] PROGMEM = R"=====(
       .btn-reset:hover {
         background: #c82333;
       }
+      /* The container wrapper around the switch */
+      .switch {
+        position: relative;
+        display: inline-block;
+        width: 60px;
+        height: 34px;
+      }
+
+      /* Hide the default HTML checkbox */
+      .switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+
+      /* The visual track (slider background) */
+      .slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        border-radius: 34px;
+        transition: 0.4s;
+      }
+
+      /* The circular knob inside the switch */
+      .slider::before {
+        position: absolute;
+        content: "";
+        height: 26px;
+        width: 26px;
+        left: 4px;
+        bottom: 4px;
+        background-color: white;
+        border-radius: 50%;
+        transition: 0.4s;
+      }
+
+      /* Track changes to "Checked" state: change background color */
+      .switch input:checked + .slider {
+        background-color: #4CAF50; /* Green when turned on */
+      }
+
+      /* Track changes to "Checked" state: slide the knob to the right */
+      .switch input:checked + .slider::before {
+        transform: translateX(26px);
+      }
     </style>
   </head>
   <body>
@@ -99,6 +150,17 @@ const char INDEX_PAGE[] PROGMEM = R"=====(
 
     <div class="card">
       <h3>Pengaturan Variabel</h3>
+      <form action="/set_device_location" method="GET">
+        <label>Device Location:</label>
+        <input
+          type="text"
+          name="device_location"
+          id="device_location"
+          value="{device_location}"
+          required
+        />
+        <button type="submit">Simpan</button>
+      </form>
       <form action="/set_brightness_mode" method="GET">
         <label>Brightness Mode:</label>
         <select name="brightness_mode">
@@ -127,16 +189,6 @@ const char INDEX_PAGE[] PROGMEM = R"=====(
         </select>
         <button type="submit">Simpan</button>
       </form>
-      <form action="/set_device_location" method="GET">
-        <label>Ubah Lokasi Perangkat:</label>
-        <input
-          type="text"
-          name="device_location"
-          id="device_location"
-          required
-        />
-        <button type="submit">Simpan</button>
-      </form>
       <form action="/set_custom_text" method="GET">
         <label>Custom Text:</label>
         <input
@@ -161,18 +213,46 @@ const char INDEX_PAGE[] PROGMEM = R"=====(
       </form>
     </div>
 
+        <div class="card">
+      <h3>WiFi Manager</h3>
+      <div>
+        Status:
+        <div class="value" id="wifi_status">{wifi_status}</div>
+      </div>
+      <div>
+        IP Address:
+        <div class="value" id="local_ip_address">{local_ip_address}</div>
+      </div>
+      <form action="/save_wifi" method="POST">
+        <label>Home Wi-Fi SSID:</label>
+        <input type="text" name="ssid" placeholder="Enter Wi-Fi Name" value="{ssid_value}" required />
+      </br>
+        <label>Wi-Fi Password:</label>
+        <input type="password" name="password" placeholder="Enter Password" value="{ssid_password}" />
+      </br>
+        <label>Auto Connect:</label>
+        </br>
+        <label class="switch">
+          <input type="checkbox" name="auto_connect" {auto_connect} />
+          <span class="slider"></span>
+        </label>
+      </br></br>
+        <button type="submit">Save & Connect</button>
+      </form>
+    </div>
+
     <div class="card">
       <h3>Systems</h3>
+      <div>
+        SSID:
+        <div class="value" id="SSID">{ssid}</div>
+      </div>
       <div>
         IP Address:
         <div class="value" id="ip_address">{ip_address}</div>
       </div>
-      <div>
-        DNS Name:
-        <div class="value" id="dns_name">{dns_name}</div>
-      </div>
-      <button class="btn-reset" onclick="resetWifi()">
-        Reset Koneksi WiFi
+      <button class="btn-reset" onclick="restartDevice()">
+        Restart Device
       </button>
       <br />
       <button class="btn-reset" onclick="location.href = '/server-ota'">
@@ -181,37 +261,29 @@ const char INDEX_PAGE[] PROGMEM = R"=====(
     </div>
 
     <script>
-    //   setInterval(function () {
-    //     fetch("/data")
-    //       .then((response) => response.json())
-    //       .then((data) => {
-    //         // document.getElementById("device_location").innerText = data.device_location;
-    //         // document.getElementById("version").innerText = "v" + data.version;
-    //         // document.getElementById("brightness").innerText = data.brightness + "/15";
-    //         // document.getElementById("time_format").innerText = data.time_format == "1" ? "12 hour (AM/PM)" : "24 hour";
-    //         // document.getElementById("temperature").innerText = data.temperature;
-    //         // document.getElementById("humidity").innerText = data.humidity;
-    //         // document.getElementById("offset_temp").innerText = data.offset_temp;
-    //         // document.getElementById("offset_hum").innerText = data.offset_hum;
-    //         // document.getElementById("min_hum_start").innerText = data.min_hum_start;
-    //         // document.getElementById("max_hum_stop").innerText = data.max_hum_stop;
-    //       });
-    //   }, 2000);
+       setInterval(function () {
+         fetch("/data")
+           .then((response) => response.json())
+           .then((data) => {
+            document.getElementById("wifi_status").innerText = data.wifi_status;
+            document.getElementById("local_ip_address").innerText = data.local_ip_address;
+           });
+       }, 2000);
 
-      // function to reset wifi connection
-      function resetWifi() {
-        if (confirm("Apakah Anda yakin ingin mereset koneksi WiFi?")) {
-          fetch("/reset_wifi")
+      // function to restart device
+      function restartDevice() {
+        if (confirm("Apakah Anda yakin ingin me-restart perangkat?")) {
+          fetch("/restart_device")
             .then((response) => {
               if (response.ok) {
-                alert("Koneksi WiFi telah direset.");
+                alert("Perangkat telah di restart.");
               } else {
-                alert("Gagal mereset koneksi WiFi.");
+                alert("Gagal me-restart perangkat.");
               }
             })
             .catch((error) => {
               console.error("Error:", error);
-              alert("Terjadi kesalahan saat mereset koneksi WiFi.");
+              alert("Terjadi kesalahan saat me-restart perangkat.");
             });
         }
       }

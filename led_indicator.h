@@ -6,10 +6,10 @@ long ledDuration = 300; // 300ms
 long ledDelay = 5000;   // 5s
 enum LedState
 {
-    DISCONNECTED,
-    CONNECTED
+    LED_DISCONNECTED,
+    LED_CONNECTED
 };
-LedState currLedState = DISCONNECTED;
+LedState currLedState = LED_DISCONNECTED;
 void startLedIndicator()
 {
     digitalWrite(LED_INDICATOR_PIN, LOW);
@@ -31,7 +31,7 @@ void updateLedIndicator()
 {
     switch (currLedState)
     {
-    case DISCONNECTED:
+    case LED_DISCONNECTED:
         if (millis() - ledStart >= 200)
         {
             digitalWrite(LED_INDICATOR_PIN, !digitalRead(LED_INDICATOR_PIN));

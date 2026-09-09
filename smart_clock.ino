@@ -1,8 +1,6 @@
-#include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
-#include <ESP8266HTTPUpdateServer.h>
-#include <ESP8266HTTPClient.h>
-#include <WiFiClient.h>
+#include <ESPAsyncWebServer.h>
+#include <ESPAsyncHTTPUpdateServer.h>
+#include <ArduinoHttpClient.h>
 #include <Adafruit_AHT10.h>
 #include <Wire.h>
 #include <time.h>
@@ -11,9 +9,6 @@
 
 #include "led_indicator.h"
 #include "littleFS_config.h"
-#include "dns_config.h"
-#include "wifi_manager_config.h"
-#include "blynk_config.h"
 #include "Font_Data.h"
 #include "Font_Data_2.h"
 #include "index_page.h"
@@ -24,23 +19,117 @@
 uint8_t LDR_PIN = 17; // A0
 
 String deviceLocation = "";
-String version = "1.1.0";
+String version = "1.2.0";
 
-enum DisplayState
+// Access Point ===============================
+// Set Access Point credentials
+String ap_ssid = "SmartClock";
+const char *ap_password = ""; // Leave empty for an open network
+// Set Home Access Point credentials
+String home_ssid, home_ssid_password;
+bool isWiFiConnected = false, autoConnect = false;
+unsigned long startTime = 0, timeoutCounter = 0;
+enum ConnectionState
 {
-    SHOW_CONNECTION_SETUP,
-    SHOW_CONNECTION_FAILED,
-    SHOW_TIMEZONE_FAILED,
-    SHOW_NTP_FAILED,
-    SHOW_CLOCK,
-    SHOW_WDAY,
-    SHOW_DATE,
-    SHOW_TEMP_HUM,
-    SHOW_CUSTOM_TEXT,
+    CONNECTING,
+    CONNECTED,
+    FAILED,
+    DISCONNECTED
 };
-DisplayState displayState = SHOW_CLOCK;
-// Display buffer
-char buffer[40];
+ConnectionState connectionState = DISCONNECTED;
+const char *connectionStateToString(ConnectionState state)
+{
+    switch (state)
+    {
+    case CONNECTING:
+        return "Connecting";
+    case CONNECTED:
+        return "Connected";
+    case FAILED:
+        return "Failed";
+    case DISCONNECTED:
+        return "Disconnected";
+    default:
+        return "Unknown State";
+    }
+}
+void initAP()
+{
+    WiFi.mode(WIFI_AP_STA);
+
+    // Create unique AP Name
+    ap_ssid = ap_ssid + "-" + String(ESP.getChipId(), HEX);
+
+    // 1. Configure and start the Access Point
+    Serial.println("Setting up Access Point...");
+    WiFi.softAP(ap_ssid.c_str(), ap_password);
+
+    // Print the SSID AP & IP address (Default is usually 192.168.4.1)
+    Serial.print("Access Point: ");
+    Serial.println(ap_ssid);
+    Serial.print("AP IP address: ");
+    Serial.println(WiFi.softAPIP());
+
+    home_ssid = getKeyValue("home_ssid", "").c_str();
+    home_ssid_password = getKeyValue("home_ssid_password", "").c_str();
+    autoConnect = getKeyValue("auto_connect", autoConnect ? "1" : "0").toInt() == 1;
+
+    Serial.print("Home SSID: ");
+    Serial.println(home_ssid);
+    Serial.print("Home SSID Password: ");
+    Serial.println(home_ssid_password);
+    Serial.print("Auto Connect: ");
+    Serial.println(autoConnect ? "true" : "false");
+    if (autoConnect && home_ssid != "" && home_ssid_password != "")
+    {
+        connectToHomeWiFi(home_ssid.c_str(), home_ssid_password.c_str());
+    }
+}
+void connectToHomeWiFi(const char *ssid, const char *password)
+{
+    startTime = millis();
+    timeoutCounter = 0;
+    connectionState = CONNECTING;
+    Serial.println("Connecting to Home Network...");
+    WiFi.begin(ssid, password);
+}
+void checkWiFiConnection(const std::function<void()> &onConnecting, const std::function<void(bool)> &callbackResult)
+{
+    if (!isWiFiConnected && (timeoutCounter <= 5) && millis() - startTime >= 1000)
+    {
+        startTime = millis();
+        if (WiFi.status() == WL_CONNECTED)
+        {
+            isWiFiConnected = true;
+            connectionState = CONNECTED;
+            Serial.println("\nConnected to home Wi-Fi!");
+            Serial.print("New Local IP: ");
+            Serial.println(WiFi.localIP());
+            callbackResult(true);
+        }
+        else
+        {
+            if (autoConnect && home_ssid != "" && home_ssid_password != "")
+            {
+                if (timeoutCounter >= 5)
+                {
+                    Serial.println("\nFailed to connect.");
+                    isWiFiConnected = false;
+                    connectionState = FAILED;
+                    callbackResult(false);
+                }
+                else
+                {
+                    Serial.print(".");
+                    connectionState = CONNECTING;
+                    onConnecting();
+                }
+                timeoutCounter++;
+            }
+        }
+    }
+}
+// Access Point ===============================
 
 // TEMP & HUM ===========================
 Adafruit_AHT10 aht;
@@ -69,6 +158,8 @@ void initAHTSensor()
 // Fallback: 0 = UTC (will be overridden by geolocation)
 int32_t TIMEZONE_SECONDS = 7 * 3600; // Adjust timezone offset (e.g., GMT+7 = 7 * 3600)
 // Geolocation API endpoint
+// Server details (Do NOT include "http://" here)
+const char *GEOLOCATION_ENDPOINT = "ip-api.com";
 const char *GEOLOCATION_API = "http://ip-api.com/json/?fields=country,city,lat,lon,timezone,offset";
 const unsigned long RETRY_GEOSYNC_MS = 10000; // 10 seconds timeout before retry
 // Geolocation data
@@ -91,29 +182,27 @@ void fetchGeolocation()
 {
     Serial.println("Fetching geolocation and timezone...");
 
-    WiFiClient client;
-    HTTPClient http;
-    http.begin(client, GEOLOCATION_API);
-    http.setTimeout(5000);
+    WiFiClient wifi;
+    HttpClient http = HttpClient(wifi, GEOLOCATION_ENDPOINT, 80);
 
-    int httpCode = http.GET();
+    // http.setTimeout(5000);
+    int statusCode = http.get("/json/?fields=country,city,lat,lon,timezone,offset");
+    String response = http.responseBody();
 
-    if (httpCode != HTTP_CODE_OK)
+    Serial.print("Status code: ");
+    Serial.println(statusCode);
+    Serial.print("Response: ");
+    Serial.println(response);
+
+    if (statusCode != 0)
     {
         Serial.println("Geolocation API request failed");
-        http.end();
         return;
     }
 
-    String payload = http.getString();
-    http.end();
-
-    Serial.print("Geolocation response: ");
-    Serial.println(payload);
-
     // Parse JSON response
     StaticJsonDocument<256> doc;
-    DeserializationError error = deserializeJson(doc, payload);
+    DeserializationError error = deserializeJson(doc, response);
     if (error)
     {
         Serial.print("JSON parsing failed: ");
@@ -217,6 +306,22 @@ void initTime()
 #define DATA_PIN D7 // MOSI
 #define CS_PIN D8   // SS / CS
 MD_Parola P = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
+
+enum DisplayState
+{
+    SHOW_CONNECTION_SETUP,
+    SHOW_CONNECTION_FAILED,
+    SHOW_TIMEZONE_FAILED,
+    SHOW_NTP_FAILED,
+    SHOW_CLOCK,
+    SHOW_WDAY,
+    SHOW_DATE,
+    SHOW_TEMP_HUM,
+    SHOW_CUSTOM_TEXT,
+};
+DisplayState displayState = SHOW_CLOCK;
+// Display buffer
+char buffer[40];
 
 bool autoBrightness = false;
 int brightness = 3;
@@ -353,7 +458,7 @@ void updateDisplay()
                 {
                     P.displayText(buffer, PA_CENTER, 50, 3000, PA_SCROLL_UP, PA_SCROLL_UP);
                 }
-                else 
+                else
                 {
                     P.displayText(buffer, PA_CENTER, 50, 50, PA_SCROLL_LEFT, PA_SCROLL_LEFT);
                 }
@@ -480,15 +585,23 @@ void getWeatherString(char *buffer)
 // Display configuration ================
 
 // WEBSERVER ============================
-ESP8266HTTPUpdateServer httpUpdater;
-ESP8266WebServer server(80);
-void handleRoot()
+ESPAsyncHTTPUpdateServer httpUpdater;
+// Create AsyncWebServer object on port 80
+AsyncWebServer server(80);
+void handleRoot(AsyncWebServerRequest *request)
 {
     String html = INDEX_PAGE;
     html.replace("{version}", String(version));
     html.replace("{device_location}", String(deviceLocation));
-    html.replace("{ip_address}", WiFi.localIP().toString());
-    html.replace("{dns_name}", "http://" + localDNS + ".local");
+    html.replace("{ssid}", String(ap_ssid));
+    html.replace("{ip_address}", WiFi.softAPIP().toString());
+
+    html.replace("{wifi_status}", String(connectionStateToString(connectionState)));
+    html.replace("{local_ip_address}", isWiFiConnected ? WiFi.localIP().toString() : String("0.0.0.0"));
+    html.replace("{ssid_value}", String(home_ssid));
+    html.replace("{ssid_password}", String(home_ssid_password));
+    html.replace("{auto_connect}", autoConnect ? "checked" : "");
+
     html.replace("{brightness}", String(brightness) + "/" + String(maxBrightness));
     html.replace("{brightness_mode}", String(autoBrightness ? "Auto" : "Manual"));
     html.replace("{brightness_manual}", String(autoBrightness ? "" : "selected"));
@@ -503,91 +616,115 @@ void handleRoot()
     html.replace("{custom_text0}", String(customText0));
     html.replace("{custom_text1}", String(customText1));
     html.replace("{custom_text2}", String(customText2));
-    server.send_P(200, "text/html", html.c_str());
+    request->send(200, "text/html", html.c_str());
 }
-void handleData()
+void handleData(AsyncWebServerRequest *request)
 {
     String json = "{";
-    json += "\"device_location\":\"" + String(deviceLocation) + "\"";
-    json += ", \"version\":\"" + String(version) + "\"";
-    json += ", \"brightness\":\"" + String(brightness) + "\"";
-    json += ", \"time_format\":\"" + String(use12HourFormat ? 1 : 0) + "\"";
+    json += "\"wifi_status\":\"" + String(connectionStateToString(connectionState)) + "\"";
+    json += ", \"local_ip_address\":\"" + String(isWiFiConnected ? WiFi.localIP().toString() : "0.0.0.0") + "\"";
     json += "}";
-
-    server.sendHeader("Cache-Control", "no-cache");
-    server.send(200, "application/json", json);
+    request->send(200, "application/json", json);
 }
-void handleSetDeviceLocation()
+void handleSetDeviceLocation(AsyncWebServerRequest *request)
 {
-    if (server.hasArg("device_location"))
+    if (request->hasArg("device_location"))
     {
-        deviceLocation = server.arg("device_location");
+        deviceLocation = request->arg("device_location");
         setKeyValue("device_location", deviceLocation.c_str());
     }
-    server.sendHeader("Location", "/");
-    server.send(303);
+    request->redirect("/");
 }
-void handleSetBrightnessMode()
+void handleSetBrightnessMode(AsyncWebServerRequest *request)
 {
-    if (server.hasArg("brightness_mode"))
+    if (request->hasArg("brightness_mode"))
     {
-        autoBrightness = server.arg("brightness_mode").toInt() == 1;
+        autoBrightness = request->arg("brightness_mode").toInt() == 1;
         setKeyValue("auto_brightness", String(autoBrightness ? "1" : "0").c_str());
     }
-    server.sendHeader("Location", "/");
-    server.send(303);
+    request->redirect("/");
 }
-void handleSetBrightness()
+void handleSetBrightness(AsyncWebServerRequest *request)
 {
-    if (server.hasArg("brightness"))
+    if (request->hasArg("brightness"))
     {
-        brightness = server.arg("brightness").toInt();
+        brightness = request->arg("brightness").toInt();
         P.setIntensity(brightness);
         setKeyValue("brightness", String(brightness).c_str());
     }
-    server.sendHeader("Location", "/");
-    server.send(303);
+    request->redirect("/");
 }
-void handleSetTimeFormat()
+void handleSetTimeFormat(AsyncWebServerRequest *request)
 {
-    if (server.hasArg("time_format"))
+    if (request->hasArg("time_format"))
     {
-        use12HourFormat = server.arg("time_format").toInt() == 1;
+        use12HourFormat = request->arg("time_format").toInt() == 1;
         setKeyValue("use12HourFormat", String(use12HourFormat ? "1" : "0").c_str());
     }
-    server.sendHeader("Location", "/");
-    server.send(303);
+    request->redirect("/");
 }
-void handleSetCustomText()
+void handleSetCustomText(AsyncWebServerRequest *request)
 {
-    if (server.hasArg("custom_text0"))
+    if (request->hasArg("custom_text0"))
     {
-        customText0 = server.arg("custom_text0").c_str();
+        customText0 = request->arg("custom_text0").c_str();
         customText[0] = customText0.c_str();
         setKeyValue("custom_text0", customText0.c_str());
     }
-    if (server.hasArg("custom_text1"))
+    if (request->hasArg("custom_text1"))
     {
-        customText1 = server.arg("custom_text1").c_str();
+        customText1 = request->arg("custom_text1").c_str();
         customText[1] = customText1.c_str();
         setKeyValue("custom_text1", customText1.c_str());
     }
-    if (server.hasArg("custom_text2"))
+    if (request->hasArg("custom_text2"))
     {
-        customText2 = server.arg("custom_text2").c_str();
+        customText2 = request->arg("custom_text2").c_str();
         customText[2] = customText2.c_str();
         setKeyValue("custom_text2", customText2.c_str());
     }
-    server.sendHeader("Location", "/");
-    server.send(303);
+    request->redirect("/");
 }
-void handleWebResetWiFi()
+// void handleWebResetWiFi(AsyncWebServerRequest *request)
+// {
+//     request->redirect("/");
+//     wifiManager.resetSettings();
+//     delay(3000);
+//     ESP.restart(); // Reset and try again
+// }
+void handleRestartDevice(AsyncWebServerRequest *request)
 {
-    server.sendHeader("Location", "/");
-    server.send(303);
-    wifiManager.resetSettings();
-    delay(3000);
+    request->redirect("/");
+    delay(2000);
     ESP.restart(); // Reset and try again
+}
+void handleSaveWifi(AsyncWebServerRequest *request)
+{
+    if (request->hasArg("ssid"))
+    {
+        String client_ssid = request->arg("ssid");
+        String client_pass = request->arg("password");
+        String auto_connect = request->arg("auto_connect");
+
+        Serial.println("\n--- Received Credentials ---");
+        Serial.print("SSID: ");
+        Serial.println(client_ssid);
+        Serial.print("Password: ");
+        Serial.println(client_pass);
+        Serial.print("Auto Connect: ");
+        Serial.println(auto_connect);
+
+        // Save credential
+        setKeyValue("home_ssid", client_ssid.c_str());
+        setKeyValue("home_ssid_password", client_pass.c_str());
+        setKeyValue("auto_connect", auto_connect != "" ? "1" : "0");
+        request->redirect("/");
+        connectToHomeWiFi(client_ssid.c_str(), client_pass.c_str());
+    }
+    else
+    {
+        request->send(400, "text/plain", "Bad Request: Missing SSID");
+    }
 }
 void initWebserver()
 {
@@ -599,14 +736,15 @@ void initWebserver()
     server.on("/set_brightness", handleSetBrightness);
     server.on("/set_time_format", handleSetTimeFormat);
     server.on("/set_custom_text", handleSetCustomText);
-    server.on("/reset_wifi", handleWebResetWiFi);
+    server.on("/restart_device", handleRestartDevice);
+    server.on("/save_wifi", HTTP_POST, handleSaveWifi);
 
     // Define what happens when you visit the OTA update page
-    server.on("/server-ota", []()
+    server.on("/server-ota", [](AsyncWebServerRequest *request)
               { 
     String html = OTA_PAGE;
     html.replace("{version}", String(version));
-    server.send(200, "text/html", html); });
+    request->send(200, "text/html", html); });
     //   Setup OTA Update Server
     httpUpdater.setup(&server);
 
@@ -615,41 +753,35 @@ void initWebserver()
 
     Serial.println("HTTP server started");
 }
-void runWebServer()
-{
-    server.handleClient();
-}
 // WEBSERVER ============================
 
 void setup()
 {
     Serial.begin(115200);
 
-    initDisplay();
     initLittleFS();
     deviceLocation = getKeyValue("device_location", "");
+    initDisplay();
     initLedIndicator();
+    initAP();
+    initWebserver();
+
     initAHTSensor();
     initGeoLocation();
     initTime();
-
-    initWiFiConnection(onConnection, onConnectingResult);
-    // Setup mDNS for local network access
-    initDNS();
 }
 
 void loop()
 {
-    wifiManager.process();
     updateLedIndicator();
-    runDNS();
     updateDisplay();
-    checkWiFiConnection(onConnected);
+
+    checkWiFiConnection(onConnecting, onConnectingResult);
     // This section will running after the connection established !
     if (isWiFiConnected)
     {
         // runBlynk();
-        runWebServer();
+        // runWebServer();
 
         // if (!geoSync && millis() - lastGeoSync >= RETRY_GEOSYNC_MS)
         //     fetchGeolocation();
@@ -662,35 +794,30 @@ void loop()
     }
 }
 
-void onConnection()
+void onConnecting()
 {
     // onConnecting...
-    Serial.println("On Connecting...");
+    Serial.println("WiFi Connecting...");
     P.displayClear();
     P.displayText("WiFi...", PA_LEFT, 60, 1000, PA_NO_EFFECT, PA_SCROLL_LEFT);
 }
 void onConnectingResult(bool connected)
 {
-    if (!connected)
+    if (connected)
+    {
+        // Serial.println("Yee hay connected !");
+        // This section only running once, after connection establish !
+        // This like setup()
+        Serial.println("This only running once, when WiFi connected !");
+        currLedState = LED_CONNECTED;
+        fetchGeolocation();
+        syncTimeFromNTP();
+    }
+    else
     {
         Serial.println("Connection Failed !");
         P.displayClear();
         // P.print("Connection Failed !");
         P.displayText("Connection Failed !", PA_LEFT, 60, 1000, PA_NO_EFFECT, PA_SCROLL_LEFT);
     }
-    else
-    {
-        Serial.println("Yee hay connected !");
-    }
-}
-void onConnected()
-{
-    // This section only running once, after connection establish !
-    // This like setup()
-    Serial.println("This only running once, when WiFi connected !");
-    currLedState = CONNECTED;
-    // initBlynk();
-    initWebserver();
-    fetchGeolocation();
-    syncTimeFromNTP();
 }
