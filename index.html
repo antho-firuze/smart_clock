@@ -137,7 +137,7 @@
         <div class="value" id="brightness_mode">{brightness_mode}</div>
       </div>
       <div>
-        Manual Brightness Level:
+        Brightness Level:
         <div class="value" id="brightness">{brightness}</div>
       </div>
       <div>
@@ -159,6 +159,14 @@
         />
         <button type="submit">Simpan</button>
       </form>
+      <form action="/set_display_screen" method="GET">
+        <label>Number of Screens:</label>
+        <select name="display_screen">
+          <option value="4" {display_screen_4}>4 Screens</option>
+          <option value="8" {display_screen_8}>8 Screens</option>
+        </select>
+        <button type="submit">Simpan</button>
+      </form>
       <form action="/set_brightness_mode" method="GET">
         <label>Brightness Mode:</label>
         <select name="brightness_mode">
@@ -168,16 +176,19 @@
         <button type="submit">Simpan</button>
       </form>
       <form action="/set_brightness" method="GET">
-        <label>Brightness Level:</label>
-        <input
-          type="range"
-          name="brightness"
-          min="{min_brightness}"
-          max="{max_brightness}"
-          value="{brightness_value}"
-          {set_brightness}
-        />
-        <button type="submit" {set_brightness}>Simpan</button>
+        <label>Brightness Level: <output id="brightness_level">{brightness_value}</output></label>
+        <input type="range" name="brightness" min="{min_brightness}" max="{max_brightness}" value="{brightness_value}" {brightness_level_state} oninput="brightness_level.value = this.value" />
+        <button type="submit" {brightness_level_state}>Simpan</button>
+      </form>
+      <form action="/set_min_brightness_limit" method="GET">
+        <label>Min. Brightness Limit: <output id="min_limit">{min_brightness_limit}</output></label>
+        <input type="range" name="min_brightness_limit" min="{min_brightness}" max="{max_brightness}" value="{min_brightness_limit}" {brightness_limit_state} oninput="min_limit.value = this.value" />
+        <button type="submit" {brightness_limit_state}>Simpan</button>
+      </form>
+      <form action="/set_max_brightness_limit" method="GET">
+        <label>Max. Brightness Limit: <output id="max_limit">{max_brightness_limit}</output></label>
+        <input type="range" name="max_brightness_limit" min="{min_brightness}" max="{max_brightness}" value="{max_brightness_limit}" {brightness_limit_state} oninput="max_limit.value = this.value" />
+        <button type="submit" {brightness_limit_state}>Simpan</button>
       </form>
       <form action="/set_time_format" method="GET">
         <label>Time Format:</label>

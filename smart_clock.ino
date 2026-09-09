@@ -69,7 +69,9 @@ void initAP()
     Serial.println(ap_ssid);
     Serial.print("AP IP address: ");
     Serial.println(WiFi.softAPIP());
-
+}
+void initHomeWiFi()
+{
     home_ssid = getKeyValue("home_ssid", "").c_str();
     home_ssid_password = getKeyValue("home_ssid_password", "").c_str();
     autoConnect = getKeyValue("auto_connect", autoConnect ? "1" : "0").toInt() == 1;
@@ -323,10 +325,10 @@ DisplayState displayState = SHOW_CLOCK;
 // Display buffer
 char buffer[40];
 
+int activeDevices = 4;
 bool autoBrightness = false;
 int brightness = 3;
-int minBrightness = 0;
-int maxBrightness = 15;
+int minBrightness = 0, maxBrightness = 3;
 int minIntensity = 1023; // Dark
 int maxIntensity = 800;  // Light
 unsigned long clockTimer = 0, clockBlinkingTimer = 0, autoBrightnessTimer = 0;
@@ -346,8 +348,15 @@ uint8_t colonChar[] = {2, 0x36, 0x36};
 uint8_t narrowBlank[] = {2, 0x00, 0x00};      // same width as colon, for blink-off
 uint8_t smallA_chr[] = {3, 0x78, 0x14, 0x78}; // 3x5 small A (AM indicator)
 uint8_t smallP_chr[] = {3, 0x7C, 0x14, 0x0C}; // 3x5 small P (PM indicator)
+void updateDisplayModules(int numDevices)
+{
+    P.displayClear();
+    P.setZone(0, 0, numDevices - 1);
+    P.displayReset();
+}
 void initDisplay()
 {
+    activeDevices = getKeyValue("display_screen", String(activeDevices).c_str()).toInt();
     autoBrightness = getKeyValue("auto_brightness", autoBrightness ? "1" : "0") == "1";
     brightness = getKeyValue("brightness", String(brightness).c_str()).toInt();
     minBrightness = getKeyValue("min_brightness", String(minBrightness).c_str()).toInt();
@@ -363,6 +372,10 @@ void initDisplay()
     P.begin();
     P.setInvert(false);
     P.setIntensity(brightness);
+
+    // Set default starting zone size
+    updateDisplayModules(activeDevices);
+
     P.addChar(':', colonChar);
     P.addChar('', narrowBlank);
     P.addChar('', smallA_chr);
@@ -372,6 +385,8 @@ void initDisplay()
     // P.setFont(myFont);
 
     displayState = SHOW_CLOCK;
+    // This is used for trigger the .displayAnimated()
+    P.displayText("WiFi...", PA_LEFT, 60, 1000, PA_NO_EFFECT, PA_SCROLL_LEFT);
 }
 void updateDisplay()
 {
@@ -436,7 +451,10 @@ void updateDisplay()
             Serial.println("SHOW_WDAY");
             getWeekDay(buffer);
             Serial.println(buffer);
-            P.displayText(buffer, PA_CENTER, 75, 1500, PA_SCROLL_UP, PA_SCROLL_UP);
+            if (String(buffer) != "No Day")
+            {
+                P.displayText(buffer, PA_CENTER, 75, 1500, PA_SCROLL_UP, PA_SCROLL_UP);
+            }
             displayState = SHOW_DATE;
             break;
 
@@ -444,7 +462,10 @@ void updateDisplay()
             Serial.println("SHOW_DATE");
             getDateString(buffer);
             Serial.println(buffer);
-            P.displayText(buffer, PA_CENTER, 50, 2000, PA_SCROLL_UP, PA_SCROLL_UP);
+            if (String(buffer) != "No Date")
+            {
+                P.displayText(buffer, PA_CENTER, 50, 2000, PA_SCROLL_UP, PA_SCROLL_UP);
+            }
             displayState = SHOW_TEMP_HUM;
             break;
 
@@ -454,7 +475,7 @@ void updateDisplay()
             Serial.println(buffer);
             if (String(buffer) != "Sensor Error")
             {
-                if (MAX_DEVICES > 4)
+                if (activeDevices > 4)
                 {
                     P.displayText(buffer, PA_CENTER, 50, 3000, PA_SCROLL_UP, PA_SCROLL_UP);
                 }
@@ -492,9 +513,19 @@ void updateDisplay()
 void getClockString(char *buffer)
 {
     struct tm timeinfo;
-    if (!getLocalTime(&timeinfo))
+    if (!getLocalTime(&timeinfo, 1000))
     {
-        strcpy(buffer, "00:00:00");
+        if (activeDevices > 4)
+        {
+            // strcpy(buffer, "00:00:00");
+            sprintf(buffer, "%02d%c%02d%c%02d", 0, (flasher ? ':' : ' '), 0, (flasher ? ':' : ' '), 0);
+        }
+        else
+        {
+            // strcpy(buffer, "00:00");
+            sprintf(buffer, "%02d%c%02d", 0, (flasher ? ':' : ' '), 0);
+        }
+        flasher = !flasher;
         return;
     }
     if (use12HourFormat)
@@ -509,7 +540,7 @@ void getClockString(char *buffer)
     m = timeinfo.tm_min;
     s = timeinfo.tm_sec;
     // Alternates the colon blinking every second
-    if (MAX_DEVICES > 4)
+    if (activeDevices > 4)
     {
         if (use12HourFormat)
         {
@@ -538,7 +569,7 @@ void getClockString(char *buffer)
 void getWeekDay(char *buffer)
 {
     struct tm timeinfo;
-    if (!getLocalTime(&timeinfo))
+    if (!getLocalTime(&timeinfo, 1000))
     {
         strcpy(buffer, "No Day");
         return;
@@ -548,7 +579,7 @@ void getWeekDay(char *buffer)
 void getDateString(char *buffer)
 {
     struct tm timeinfo;
-    if (!getLocalTime(&timeinfo))
+    if (!getLocalTime(&timeinfo, 1000))
     {
         strcpy(buffer, "No Date");
         return;
@@ -557,7 +588,7 @@ void getDateString(char *buffer)
     month = timeinfo.tm_mon + 1;
     day = timeinfo.tm_mday;
     String shortMonth = monthNames[month];
-    if (MAX_DEVICES > 4)
+    if (activeDevices > 4)
     {
         // strftime(buffer, 20, "%A, %b %d", &timeinfo); // Example: "Monday, Sep 01"
         sprintf(buffer, "%d %s %04d", day, shortMonth, year); // 1 Jun 2026
@@ -602,14 +633,21 @@ void handleRoot(AsyncWebServerRequest *request)
     html.replace("{ssid_password}", String(home_ssid_password));
     html.replace("{auto_connect}", autoConnect ? "checked" : "");
 
-    html.replace("{brightness}", String(brightness) + "/" + String(maxBrightness));
+    html.replace("{display_screen_4}", String(activeDevices == 4 ? "selected" : ""));
+    html.replace("{display_screen_8}", String(activeDevices == 8 ? "selected" : ""));
+
+    html.replace("{brightness}", String(brightness) + "/" + String(15));
     html.replace("{brightness_mode}", String(autoBrightness ? "Auto" : "Manual"));
     html.replace("{brightness_manual}", String(autoBrightness ? "" : "selected"));
     html.replace("{brightness_auto}", String(autoBrightness ? "selected" : ""));
-    html.replace("{min_brightness}", String(minBrightness));
-    html.replace("{max_brightness}", String(maxBrightness));
+    html.replace("{min_brightness}", String(0));
+    html.replace("{max_brightness}", String(15));
     html.replace("{brightness_value}", String(brightness));
-    html.replace("{set_brightness}", String(autoBrightness ? "disabled" : ""));
+    html.replace("{brightness_level_state}", String(autoBrightness ? "disabled" : ""));
+    html.replace("{min_brightness_limit}", String(minBrightness));
+    html.replace("{max_brightness_limit}", String(maxBrightness));
+    html.replace("{brightness_limit_state}", String(autoBrightness ? "" : "disabled"));
+
     html.replace("{time_format}", String(use12HourFormat ? "12 hour (AM/PM)" : "24 hour"));
     html.replace("{time_format_24}", String(use12HourFormat ? "" : "selected"));
     html.replace("{time_format_12}", String(use12HourFormat ? "selected" : ""));
@@ -635,6 +673,24 @@ void handleSetDeviceLocation(AsyncWebServerRequest *request)
     }
     request->redirect("/");
 }
+void handleSetDisplayScreen(AsyncWebServerRequest *request)
+{
+    if (request->hasArg("display_screen"))
+    {
+        int requestedCount = request->arg("display_screen").toInt();
+        if (requestedCount == 4 || requestedCount == 8)
+        {
+            activeDevices = requestedCount;
+            updateDisplayModules(activeDevices);
+            setKeyValue("display_screen", String(activeDevices).c_str());
+            // request->send(200, "text/plain", "Device count updated successfully.");
+            request->redirect("/");
+            return;
+        }
+    }
+    // request->send(400, "text/plain", "Invalid count. Use 4 or 8.");
+    request->redirect("/");
+}
 void handleSetBrightnessMode(AsyncWebServerRequest *request)
 {
     if (request->hasArg("brightness_mode"))
@@ -651,6 +707,24 @@ void handleSetBrightness(AsyncWebServerRequest *request)
         brightness = request->arg("brightness").toInt();
         P.setIntensity(brightness);
         setKeyValue("brightness", String(brightness).c_str());
+    }
+    request->redirect("/");
+}
+void handleSetMinBrightnessLimit(AsyncWebServerRequest *request)
+{
+    if (request->hasArg("min_brightness_limit"))
+    {
+        minBrightness = request->arg("min_brightness_limit").toInt();
+        setKeyValue("min_brightness", String(minBrightness).c_str());
+    }
+    request->redirect("/");
+}
+void handleSetMaxBrightnessLimit(AsyncWebServerRequest *request)
+{
+    if (request->hasArg("max_brightness_limit"))
+    {
+        maxBrightness = request->arg("max_brightness_limit").toInt();
+        setKeyValue("max_brightness", String(maxBrightness).c_str());
     }
     request->redirect("/");
 }
@@ -695,7 +769,7 @@ void handleSetCustomText(AsyncWebServerRequest *request)
 void handleRestartDevice(AsyncWebServerRequest *request)
 {
     request->redirect("/");
-    delay(2000);
+    // delay(2000);
     ESP.restart(); // Reset and try again
 }
 void handleSaveWifi(AsyncWebServerRequest *request)
@@ -732,8 +806,12 @@ void initWebserver()
     server.on("/", handleRoot);
     server.on("/data", handleData);
     server.on("/set_device_location", handleSetDeviceLocation);
+    server.on("/set_display_screen", handleSetDisplayScreen);
     server.on("/set_brightness_mode", handleSetBrightnessMode);
     server.on("/set_brightness", handleSetBrightness);
+    server.on("/set_min_brightness_limit", handleSetMinBrightnessLimit);
+    server.on("/set_max_brightness_limit", handleSetMaxBrightnessLimit);
+
     server.on("/set_time_format", handleSetTimeFormat);
     server.on("/set_custom_text", handleSetCustomText);
     server.on("/restart_device", handleRestartDevice);
@@ -769,6 +847,8 @@ void setup()
     initAHTSensor();
     initGeoLocation();
     initTime();
+
+    initHomeWiFi();
 }
 
 void loop()
@@ -797,17 +877,16 @@ void loop()
 void onConnecting()
 {
     // onConnecting...
-    Serial.println("WiFi Connecting...");
-    P.displayClear();
-    P.displayText("WiFi...", PA_LEFT, 60, 1000, PA_NO_EFFECT, PA_SCROLL_LEFT);
+    // Serial.println("WiFi Connecting...");
+    // P.displayClear();
+    // P.displayText("WiFi...", PA_LEFT, 60, 1000, PA_NO_EFFECT, PA_SCROLL_LEFT);
 }
 void onConnectingResult(bool connected)
 {
     if (connected)
     {
-        // Serial.println("Yee hay connected !");
         // This section only running once, after connection establish !
-        // This like setup()
+        // This is like a setup()
         Serial.println("This only running once, when WiFi connected !");
         currLedState = LED_CONNECTED;
         fetchGeolocation();
@@ -815,9 +894,14 @@ void onConnectingResult(bool connected)
     }
     else
     {
-        Serial.println("Connection Failed !");
-        P.displayClear();
+        Serial.println("WiFi Failed !");
+        Serial.println("\nTrying to re-connect...");
+        if (autoConnect && home_ssid != "" && home_ssid_password != "")
+        {
+            connectToHomeWiFi(home_ssid.c_str(), home_ssid_password.c_str());
+        }
+        // P.displayClear();
         // P.print("Connection Failed !");
-        P.displayText("Connection Failed !", PA_LEFT, 60, 1000, PA_NO_EFFECT, PA_SCROLL_LEFT);
+        // P.displayText("WiFi Failed !", PA_LEFT, 60, 1000, PA_NO_EFFECT, PA_SCROLL_LEFT);
     }
 }
