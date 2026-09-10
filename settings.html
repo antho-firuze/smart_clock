@@ -1,5 +1,3 @@
-// --- TEKS HTML (Menggunakan PROGMEM agar hemat RAM) ---
-const char INDEX_PAGE[] PROGMEM = R"=====(
 <!doctype html>
 <html>
   <head>
@@ -129,47 +127,85 @@ const char INDEX_PAGE[] PROGMEM = R"=====(
     <div class="card">
       <h1>Smart Clock</h1>
       <div class="version" id="version">{version}</div>
-      <hr />
-      <div>
-        Device Location:
-        <div class="value" id="device_location">{device_location}</div>
-      </div>
-      <div>
-        Number of Screens:
-        <div class="value" id="number_of_screen">{number_of_screen}</div>
-      </div>
-      <div>
-        Brightness Mode:
-        <div class="value" id="brightness_mode">{brightness_mode}</div>
-      </div>
-      <div>
-        Brightness Level:
-        <div class="value" id="brightness">{brightness}</div>
-      </div>
-      <div>
-        Min. Brightness Limit:
-        <div class="value" id="min_brightness_limit">{min_brightness_limit}</div>
-      </div>
-      <div>
-        Max. Brightness Limit:
-        <div class="value" id="max_brightness_limit">{max_brightness_limit}</div>
-      </div>
-      <div>
-        Time Format:
-        <div class="value" id="time_format">{time_format}</div>
-      </div>
-      <div>
-        Custom Text:
-        <div class="value" id="custom_text0">{custom_text0}</div>
-        <div class="value" id="custom_text1">{custom_text1}</div>
-        <div class="value" id="custom_text2">{custom_text2}</div>
-      </div>
-      <button class="btn-reset" onclick="location.href = '/settings'">
-        Settings
-      </button>
     </div>
 
     <div class="card">
+      <h3>Variable Settings</h3>
+      <form action="/set_device_location" method="GET">
+        <label>Device Location:</label>
+        <input
+          type="text"
+          name="device_location"
+          id="device_location"
+          value="{device_location}"
+          required
+        />
+        <button type="submit">Simpan</button>
+      </form>
+      <form action="/set_display_screen" method="GET">
+        <label>Number of Screens:</label>
+        <select name="display_screen">
+          <option value="4" {display_screen_4}>4 Screens</option>
+          <option value="8" {display_screen_8}>8 Screens</option>
+        </select>
+        <button type="submit">Simpan</button>
+      </form>
+      <form action="/set_brightness_mode" method="GET">
+        <label>Brightness Mode:</label>
+        <select name="brightness_mode">
+          <option value="0" {brightness_manual}>Manual</option>
+          <option value="1" {brightness_auto}>Auto</option>
+        </select>
+        <button type="submit">Simpan</button>
+      </form>
+      <form action="/set_brightness" method="GET">
+        <label>Brightness Level: <output id="brightness_level">{brightness_value}</output></label>
+        <input type="range" name="brightness" min="{min_brightness}" max="{max_brightness}" value="{brightness_value}" {brightness_level_state} oninput="brightness_level.value = this.value" />
+        <button type="submit" {brightness_level_state}>Simpan</button>
+      </form>
+      <form action="/set_min_brightness_limit" method="GET">
+        <label>Min. Brightness Limit: <output id="min_limit">{min_brightness_limit}</output></label>
+        <input type="range" name="min_brightness_limit" min="{min_brightness}" max="{max_brightness}" value="{min_brightness_limit}" {brightness_limit_state} oninput="min_limit.value = this.value" />
+        <button type="submit" {brightness_limit_state}>Simpan</button>
+      </form>
+      <form action="/set_max_brightness_limit" method="GET">
+        <label>Max. Brightness Limit: <output id="max_limit">{max_brightness_limit}</output></label>
+        <input type="range" name="max_brightness_limit" min="{min_brightness}" max="{max_brightness}" value="{max_brightness_limit}" {brightness_limit_state} oninput="max_limit.value = this.value" />
+        <button type="submit" {brightness_limit_state}>Simpan</button>
+      </form>
+      <form action="/set_time_format" method="GET">
+        <label>Time Format:</label>
+        <select name="time_format">
+          <option value="0" {time_format_24}>24 hour</option>
+          <option value="1" {time_format_12}>12 hour (AM/PM)</option>
+        </select>
+        <button type="submit">Simpan</button>
+      </form>
+      <form action="/set_custom_text" method="GET">
+        <label>Custom Text:</label>
+        <input
+          type="text"
+          name="custom_text0"
+          id="custom_text0"
+          value="{custom_text0}"
+        />
+        <input
+          type="text"
+          name="custom_text1"
+          id="custom_text1"
+          value="{custom_text1}"
+        />
+        <input
+          type="text"
+          name="custom_text2"
+          id="custom_text2"
+          value="{custom_text2}"
+        />
+        <button type="submit">Simpan</button>
+      </form>
+    </div>
+
+        <div class="card">
       <h3>WiFi Manager</h3>
       <div>
         Status:
@@ -207,11 +243,11 @@ const char INDEX_PAGE[] PROGMEM = R"=====(
         Restart Device
       </button>
       <br />
-      <button class="btn-reset" onclick="location.href = '/update'">
+      <button class="btn-reset" onclick="location.href = '/server-ota'">
         Update Firmware
       </button>
     </div>
-    
+
     <script>
        setInterval(function () {
          fetch("/data")
@@ -222,7 +258,7 @@ const char INDEX_PAGE[] PROGMEM = R"=====(
            });
        }, 2000);
 
-       // function to restart device
+      // function to restart device
       function restartDevice() {
         if (confirm("Apakah Anda yakin ingin me-restart perangkat?")) {
           fetch("/restart_device")
@@ -242,4 +278,3 @@ const char INDEX_PAGE[] PROGMEM = R"=====(
     </script>
   </body>
 </html>
-)=====";

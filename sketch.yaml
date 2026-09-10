@@ -21,7 +21,6 @@ profiles:
       - ESPAsyncTCP (1.2.4)
       - ESPAsyncHTTPUpdateServer (3.0.0)
       - ESPAsyncWebServer (3.1.0)
-      # - WiFi (1.2.7)
       - ArduinoHttpClient (0.6.1)
       - MD_Parola (3.7.5)
       - MD_MAX72XX (3.5.1)

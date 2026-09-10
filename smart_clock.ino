@@ -9,17 +9,16 @@
 
 #include "led_indicator.h"
 #include "littleFS_config.h"
-#include "Font_Data.h"
-#include "Font_Data_2.h"
+#include "Fonts.h"
 #include "index_page.h"
-#include "ota_page.h"
+#include "settings_page.h"
 
 #define SDA_PIN 4     // D2
 #define SCL_PIN 5     // D1
 uint8_t LDR_PIN = 17; // A0
 
 String deviceLocation = "";
-String version = "1.2.0";
+String version = "1.2.7";
 
 // Access Point ===============================
 // Set Access Point credentials
@@ -187,7 +186,7 @@ void fetchGeolocation()
     WiFiClient wifi;
     HttpClient http = HttpClient(wifi, GEOLOCATION_ENDPOINT, 80);
 
-    // http.setTimeout(5000);
+    http.setTimeout(3000);
     int statusCode = http.get("/json/?fields=country,city,lat,lon,timezone,offset");
     String response = http.responseBody();
 
@@ -371,6 +370,7 @@ void initDisplay()
 
     P.begin();
     P.setInvert(false);
+    P.setFont(ExtASCII);
     P.setIntensity(brightness);
 
     // Set default starting zone size
@@ -381,8 +381,6 @@ void initDisplay()
     P.addChar('', smallA_chr);
     P.addChar('', smallP_chr);
     P.displayClear();
-    // P.setFont(smallDigits);
-    // P.setFont(myFont);
 
     displayState = SHOW_CLOCK;
     // This is used for trigger the .displayAnimated()
@@ -610,7 +608,7 @@ void getWeatherString(char *buffer)
     {
         temperature = tempEvent.temperature + offsetTemp;
         humidity = humidityEvent.relative_humidity + offsetHum;
-        snprintf(buffer, 30, "T:%.1fC  H:%.0f%%", temperature, humidity); // Output pattern: T:26.5C H:65%
+        snprintf(buffer, 30, "  T:%.1fC    H:%.0f%%  ", temperature, humidity); // Output pattern: T:26.5C H:65%
     }
 }
 // Display configuration ================
@@ -622,6 +620,44 @@ AsyncWebServer server(80);
 void handleRoot(AsyncWebServerRequest *request)
 {
     String html = INDEX_PAGE;
+    html.replace("{version}", String(version));
+    html.replace("{device_location}", String(deviceLocation));
+    html.replace("{ssid}", String(ap_ssid));
+    html.replace("{ip_address}", WiFi.softAPIP().toString());
+
+    html.replace("{wifi_status}", String(connectionStateToString(connectionState)));
+    html.replace("{local_ip_address}", isWiFiConnected ? WiFi.localIP().toString() : String("0.0.0.0"));
+    html.replace("{ssid_value}", String(home_ssid));
+    html.replace("{ssid_password}", String(home_ssid_password));
+    html.replace("{auto_connect}", autoConnect ? "checked" : "");
+
+    html.replace("{number_of_screen}", String(activeDevices) + " Screens");
+    html.replace("{display_screen_4}", String(activeDevices == 4 ? "selected" : ""));
+    html.replace("{display_screen_8}", String(activeDevices == 8 ? "selected" : ""));
+
+    html.replace("{brightness}", String(brightness) + "/" + String(15));
+    html.replace("{brightness_mode}", String(autoBrightness ? "Auto" : "Manual"));
+    html.replace("{brightness_manual}", String(autoBrightness ? "" : "selected"));
+    html.replace("{brightness_auto}", String(autoBrightness ? "selected" : ""));
+    html.replace("{min_brightness}", String(0));
+    html.replace("{max_brightness}", String(15));
+    html.replace("{brightness_value}", String(brightness));
+    html.replace("{brightness_level_state}", String(autoBrightness ? "disabled" : ""));
+    html.replace("{min_brightness_limit}", String(minBrightness));
+    html.replace("{max_brightness_limit}", String(maxBrightness));
+    html.replace("{brightness_limit_state}", String(autoBrightness ? "" : "disabled"));
+
+    html.replace("{time_format}", String(use12HourFormat ? "12 hour (AM/PM)" : "24 hour"));
+    html.replace("{time_format_24}", String(use12HourFormat ? "" : "selected"));
+    html.replace("{time_format_12}", String(use12HourFormat ? "selected" : ""));
+    html.replace("{custom_text0}", String(customText0));
+    html.replace("{custom_text1}", String(customText1));
+    html.replace("{custom_text2}", String(customText2));
+    request->send(200, "text/html", html.c_str());
+}
+void handleSettingsPage(AsyncWebServerRequest *request)
+{
+    String html = SETTINGS_PAGE;
     html.replace("{version}", String(version));
     html.replace("{device_location}", String(deviceLocation));
     html.replace("{ssid}", String(ap_ssid));
@@ -759,13 +795,6 @@ void handleSetCustomText(AsyncWebServerRequest *request)
     }
     request->redirect("/");
 }
-// void handleWebResetWiFi(AsyncWebServerRequest *request)
-// {
-//     request->redirect("/");
-//     wifiManager.resetSettings();
-//     delay(3000);
-//     ESP.restart(); // Reset and try again
-// }
 void handleRestartDevice(AsyncWebServerRequest *request)
 {
     request->redirect("/");
@@ -817,12 +846,14 @@ void initWebserver()
     server.on("/restart_device", handleRestartDevice);
     server.on("/save_wifi", HTTP_POST, handleSaveWifi);
 
+    server.on("/settings", handleSettingsPage);
     // Define what happens when you visit the OTA update page
-    server.on("/server-ota", [](AsyncWebServerRequest *request)
-              { 
-    String html = OTA_PAGE;
-    html.replace("{version}", String(version));
-    request->send(200, "text/html", html); });
+    // server.on("/server-ota", [](AsyncWebServerRequest *request)
+    //           { 
+    // String html = OTA_PAGE;
+    // html.replace("{version}", String(version));
+    // request->send(200, "text/html", html); });
+
     //   Setup OTA Update Server
     httpUpdater.setup(&server);
 
@@ -858,20 +889,12 @@ void loop()
 
     checkWiFiConnection(onConnecting, onConnectingResult);
     // This section will running after the connection established !
-    if (isWiFiConnected)
-    {
-        // runBlynk();
-        // runWebServer();
-
-        // if (!geoSync && millis() - lastGeoSync >= RETRY_GEOSYNC_MS)
-        //     fetchGeolocation();
-        // Retry Sync to NTP Server when FAILED every interval time
-        // if (geoSync && !ntpSync && millis() - lastNTPSync >= RETRY_NTPSYNC_MS)
-        //     syncTimeFromNTP();
-        // Sync to NTP Server every interval time
-        if (millis() - lastNTPSync >= INTERVAL_NTPSYNC_MS)
-            syncTimeFromNTP();
-    }
+    // if (isWiFiConnected)
+    // {
+    //     // Sync to NTP Server every interval time
+    //     if (millis() - lastNTPSync >= INTERVAL_NTPSYNC_MS)
+    //         syncTimeFromNTP();
+    // }
 }
 
 void onConnecting()
@@ -900,8 +923,5 @@ void onConnectingResult(bool connected)
         {
             connectToHomeWiFi(home_ssid.c_str(), home_ssid_password.c_str());
         }
-        // P.displayClear();
-        // P.print("Connection Failed !");
-        // P.displayText("WiFi Failed !", PA_LEFT, 60, 1000, PA_NO_EFFECT, PA_SCROLL_LEFT);
     }
 }
